@@ -7,9 +7,9 @@
 #include <stdlib.h>
 
 #define __DAZZLE_IMPL__
+#define __BT_IMPL__
 
 #include <bt.h>
-#include <dt_glyphs.h>
 
 int main(int argc, char **argv) {
     SDL_Init(SDL_INIT_VIDEO);
@@ -39,9 +39,10 @@ int main(int argc, char **argv) {
     dazzle_context_t* ctx = dazzle_init_fb(alloc, &fb);
 
     dazzle_clear(ctx, 0x00000000);
-            
-    uint32_t posx = 0;
+
     uint32_t posy = 0;
+    bool term_initialized = false;
+    bt_terminal_t term;
 
     for(int i = 0; i < 10; i++) {
         FILE* f;
@@ -75,16 +76,17 @@ int main(int argc, char **argv) {
         printf("glyph data pointer: %p\n", font.glyph_data);
         printf("bytes per glyph: %d\n", font.psfx_bytes_per_glyph);
 
-        posx = 0;
+        if (!term_initialized) {
+            bt_terminal_init(&term, ctx, font, fb.width, fb.height);
+            bt_terminal_set_colors(&term, 0x000000FF, 0x00000000);
+            term_initialized = true;
+        } else {
+            bt_terminal_set_font(&term, font);
+        }
+        bt_terminal_set_cursor(&term, 0, posy / font.suggested_height);
 
-        for(int i = 0; i < font.glyph_count; i++){
-            glyph_t glyph = render_glyph(font, i,0,0x000000FF);
-            dazzle_draw(ctx, dazzle_create_blitable(ctx, posx, posy, glyph.width, glyph.height, glyph.buffer));
-            posx += glyph.width;
-            if(posx >= (fb.width - glyph.width)){
-                posx = 0;
-                posy += glyph.height;
-            }
+        for (int i = 0; i < font.glyph_count; i++) {
+            bt_terminal_put_index(&term, i);
         }
         posy += font.suggested_height;
         free(psf);
