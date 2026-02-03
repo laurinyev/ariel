@@ -8,6 +8,14 @@
 #include <dazzle.h>
 #include <dt_glyphs.h>
 
+#ifdef __BT_IMPL__
+#define __UTF8_IMPL__
+#endif
+#include <utf8.h>
+#ifdef __BT_IMPL__
+#undef __UTF8_IMPL__
+#endif
+
 typedef struct {
     dazzle_context_t* ctx;
     font_t font;
@@ -124,8 +132,24 @@ bool bt_terminal_write(bt_terminal_t* term, const char* text) {
     if (text == NULL) {
         return false;
     }
-    for (const char* cursor = text; *cursor != '\0'; cursor++) {
-        if (!bt_terminal_putc(term, *cursor)) {
+    utf8_dec_state_t state = {0};
+    for (const uint8_t* cursor = (const uint8_t*)text; *cursor != '\0'; cursor++) {
+        uint32_t codepoint = 0;
+        uint8_t result = utf8_decode(&state, *cursor, &codepoint);
+        if (result == UTF8_MORE_BYTES_REQUIRED) {
+            continue;
+        }
+        if (result == UTF8_INVALID_INPUT) {
+            state.bytes_remaining = 0;
+            codepoint = '?';
+        }
+        if (codepoint == '\n') {
+            if (!bt_terminal_putc(term, '\n')) {
+                return false;
+            }
+            continue;
+        }
+        if (!bt_terminal_put_index(term, codepoint)) {
             return false;
         }
     }
