@@ -9,8 +9,8 @@
 #include <sys/ioctl.h>
 
 #define __DAZZLE_IMPL__
+#define __BT_IMPL__
 #include <bt.h>
-#include <dt_glyphs.h>
 
 int main(int argc, char **argv) {
 
@@ -88,18 +88,13 @@ int main(int argc, char **argv) {
     printf("Suggested height: %d\n", font.suggested_height);
     printf("bytes per glyph: %d\n", font.psfx_bytes_per_glyph);
 
-    dazzle_clear(ctx, 0x00000000);
-    
-    uint32_t posx = 0;
-    uint32_t posy = 0;
-    for(int i = 0; i < font.glyph_count; i++){
-        glyph_t glyph = render_glyph(font, i,0,0x000000FF);
-        dazzle_draw(ctx, dazzle_create_blitable(ctx, posx, posy, glyph.width, glyph.height, glyph.buffer));
-        posx += glyph.width;
-        if(posx >= (fb.width - glyph.width)){
-            posx = 0;
-            posy += glyph.height;
-        }
+    bt_terminal_t term;
+    bt_terminal_init(&term, ctx, font, fb.width, fb.height);
+    bt_terminal_set_colors(&term, 0x000000FF, 0x00000000);
+    bt_terminal_clear(&term);
+
+    for (int i = 0; i < font.glyph_count; i++) {
+        bt_terminal_put_index(&term, i);
     }
 
     while (true){
