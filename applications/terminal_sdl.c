@@ -1,7 +1,16 @@
-#include <stdint.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <termios.h>
+#include <unistd.h>
 #include <SDL2/SDL.h>
 
 #define __DAZZLE_IMPL__
@@ -138,6 +147,76 @@ int main(int argc, char** argv) {
 
     bt_vt_write(&vt, banner);
 
+    int master_fd = posix_openpt(O_RDWR | O_NOCTTY);
+    if (master_fd < 0) {
+        printf("Failed to open PTY master: %s\n", strerror(errno));
+        free(font_data);
+        free((void*)fb.address);
+        SDL_DestroyTexture(texture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    if (grantpt(master_fd) != 0 || unlockpt(master_fd) != 0) {
+        printf("Failed to setup PTY: %s\n", strerror(errno));
+        close(master_fd);
+        free(font_data);
+        free((void*)fb.address);
+        SDL_DestroyTexture(texture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    char* slave_name = ptsname(master_fd);
+    if (slave_name == NULL) {
+        printf("Failed to get PTY slave name: %s\n", strerror(errno));
+        close(master_fd);
+        free(font_data);
+        free((void*)fb.address);
+        SDL_DestroyTexture(texture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    pid_t child = fork();
+    if (child == 0) {
+        setsid();
+        int slave_fd = open(slave_name, O_RDWR);
+        if (slave_fd < 0) {
+            _exit(1);
+        }
+        if (ioctl(slave_fd, TIOCSCTTY, 0) < 0) {
+            _exit(1);
+        }
+        dup2(slave_fd, STDIN_FILENO);
+        dup2(slave_fd, STDOUT_FILENO);
+        dup2(slave_fd, STDERR_FILENO);
+        if (slave_fd > STDERR_FILENO) {
+            close(slave_fd);
+        }
+        execl("/bin/sh", "sh", NULL);
+        _exit(1);
+    }
+
+    int flags = fcntl(master_fd, F_GETFL, 0);
+    fcntl(master_fd, F_SETFL, flags | O_NONBLOCK);
+
+    struct winsize ws = {
+        .ws_row = (unsigned short)term.rows,
+        .ws_col = (unsigned short)term.cols,
+        .ws_xpixel = 0,
+        .ws_ypixel = 0,
+    };
+    ioctl(master_fd, TIOCSWINSZ, &ws);
+
+    SDL_StartTextInput();
+
     bool done = false;
     while (!done) {
         SDL_Event event;
@@ -145,6 +224,34 @@ int main(int argc, char** argv) {
             if (event.type == SDL_QUIT) {
                 done = true;
                 break;
+            }
+            if (event.type == SDL_TEXTINPUT) {
+                const char* text = event.text.text;
+                write(master_fd, text, strlen(text));
+            }
+            if (event.type == SDL_KEYDOWN) {
+                if (event.key.keysym.sym == SDLK_BACKSPACE) {
+                    const char backspace = 0x7f;
+                    write(master_fd, &backspace, 1);
+                } else if (event.key.keysym.sym == SDLK_RETURN) {
+                    const char newline = '\n';
+                    write(master_fd, &newline, 1);
+                }
+            }
+        }
+
+        uint8_t read_buffer[256];
+        ssize_t read_count = read(master_fd, read_buffer, sizeof(read_buffer));
+        while (read_count > 0) {
+            bt_vt_feed(&vt, read_buffer, (size_t)read_count);
+            read_count = read(master_fd, read_buffer, sizeof(read_buffer));
+        }
+
+        if (child > 0) {
+            int status = 0;
+            pid_t result = waitpid(child, &status, WNOHANG);
+            if (result == child) {
+                done = true;
             }
         }
 
@@ -156,6 +263,10 @@ int main(int argc, char** argv) {
 
     free(font_data);
     free((void*)fb.address);
+    SDL_StopTextInput();
+    if (master_fd >= 0) {
+        close(master_fd);
+    }
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
